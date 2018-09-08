@@ -1,0 +1,68 @@
+from __future__ import print_function
+import boto3
+import json
+import re
+import urllib
+
+#To HANDLER
+ec2 = boto3.resource('ec2')
+#To puppet_api_get func
+host = "localhost"
+entitie = "nodes"
+#To certname_extract func
+exp_node_filter = r'certname.*'
+
+#puppet_api_get func
+def puppet_api_get (host_target, puppet_entitie):
+    api_content_get = urllib.urlopen("http://" + host_target + ":8080/pdb/query/v4/" + puppet_entitie)
+    json_output_raw = json.loads(api_content_get.read())
+    json_output_clean = json.dumps(json_output_raw, indent=1)
+    return(json_output_clean)
+
+#Func to remove "," from json output
+def char_remove(old, to_remove):
+    new_string = old
+    for x in to_remove:
+        new_string = new_string.replace(x, '')
+    return new_string
+
+#certname_extract func
+def certname_extract (node_filter):
+    puppet_api_get_return = puppet_api_get(host, entitie)
+    puppet_api_get_return = char_remove(puppet_api_get_return, ',')
+    puppet_certnames = re.findall(node_filter, puppet_api_get_return)
+    return(puppet_certnames)
+
+#HANDLER
+def lambda_handler(event, context):
+    # create filter for instances in running state
+    filters = [
+        {
+            'Name': 'instance-state-name', 
+            'Values': ['running']
+        }
+    ]
+    
+    # filter the instances based on filters() above
+    instances = ec2.instances.filter(Filters=filters)
+
+    # instantiate empty array
+    RunningInstances = []
+
+    for i in range(len(a)):
+        print a[i]
+
+    for instance in instances:
+        # for each instance, append to array and print instance id
+        RunningInstances.append(instance.private_dns_name)
+
+        # Call certname_extract func
+        puppet_nodes_certname = certname_extract(exp_node_filter)
+        ec2_instance_list = print(instance.private_dns_name)
+
+        for i in range(len(puppet_nodes_certname)):
+            j = puppet_nodes_certname[i]
+            k = json.dumps(b, indent=1)
+            c = re.search(j, k)
+            if c:
+                print c.group()
