@@ -1,0 +1,157 @@
+export TF_VAR_suffix="$(date +%M%S)"
+
+function exec_func ()
+{
+    export TF_VAR_resource=$1
+
+    cd ./$1
+    sh terraform_init.sh
+    terraform $2 -auto-approve
+}
+
+case "$1" in
+
+    deploy)
+
+        export RESOURCES=("alb-ftrx" "alb-btrx" "alb-frpt" "alb-brpt" "asg-ftrx" "asg-btrx" "asg-frpt" "asg-brpt" "dns-alb-stg") # recursos instanciados
+        for ((x=0; x<${#RESOURCES[*]}; x++))
+        do
+            exec_func ${RESOURCES[$x]} apply
+        done
+        date
+        ;;
+
+esac
+
+terraform init \
+-backend=true \
+-backend-config="bucket=$TF_VAR_bucket" \
+-backend-config="key=$TF_VAR_project/$TF_VAR_environment/$TF_VAR_resource-${count.index}.tfstate" \
+-backend-config="region=$TF_VAR_region"
+
+
+module "alb-brpt" {
+  source                    = "../module-alb"
+  load_balancer_name        = "${var.resource}-${count.index}"
+  security_groups           = ["${data.terraform_remote_state.firewall.back_security_group_id}", "${data.terraform_remote_state.firewall.vpc_security_group_id}"]
+  load_balancer_is_internal = true
+  logging_enabled           = false
+  subnets                   = ["${data.terraform_remote_state.vpc.private_subnets[0]}", "${data.terraform_remote_state.vpc.private_subnets[1]}", "${data.terraform_remote_state.vpc.private_subnets[2]}"]
+  tags                      = "${map("Environment", "${var.environment}")}"
+  vpc_id                    = "${data.terraform_remote_state.vpc.vpc_id}"
+  http_tcp_listeners        = "${list(map("port", "8009", "protocol", "HTTP"), map("port", "8080", "protocol", "HTTP"))}"
+  http_tcp_listeners_count  = "2"
+
+  target_groups = "${list(
+    map(
+     "name", "poc-${var.resource}-${var.suffix}",
+     "backend_protocol", "HTTP",
+     "backend_port", "8080",
+     "health_check_path", "/index.html"
+    )
+   )}"
+  target_groups_count = "1"
+}
+
+data "terraform_remote_state" "alb" {
+  backend = "s3"
+
+  config {
+    bucket = "${var.bucket}"
+    key    = "${var.project}/${var.environment}/${var.resource}-${count.index}.tfstate"
+    region = "${var.region}"
+  }
+}
+
+module "asg-brpt" {
+  source                       = "../module-asg"
+  name                         = "${var.name_prefix}-${var.resource}-${count.index}"
+  lc_name                      = "${var.name_prefix}-${var.resource}-lc-${count.index}"
+  user_data                    = "${data.template_file.cloud_init.rendered}"
+  target_group_arns            = ["${data.terraform_remote_state.alb-${count.index}.back-target_group_arns}"]
+  image_id                     = "${lookup(var.image_id, var.resource, var.img_default)}"
+  instance_type                = "${lookup(var.instance_type, var.environment)}"
+  key_name                     = "${lookup(var.key_name, var.environment)}"
+  security_groups              = ["${data.terraform_remote_state.firewall.vpc_security_group_id}", "${data.terraform_remote_state.firewall.back_security_group_id}"]
+  associate_public_ip_address  = true
+  recreate_asg_when_lc_changes = true
+
+  ebs_block_device = [
+    {
+      device_name           = "/dev/sdj"
+      volume_type           = "gp2"
+      volume_size           = "1"
+      delete_on_termination = true
+    },
+    {
+      device_name           = "/dev/sdg"
+      volume_type           = "gp2"
+      volume_size           = "6"
+      delete_on_termination = true
+    },
+    {
+      device_name           = "/dev/sdk"
+      volume_type           = "gp2"
+      volume_size           = "8"
+      delete_on_termination = true
+    },
+    {
+      device_name           = "/dev/sdi"
+      volume_type           = "gp2"
+      volume_size           = "1"
+      delete_on_termination = true
+    },
+    {
+      device_name           = "/dev/sdf"
+      volume_type           = "gp2"
+      volume_size           = "6"
+      delete_on_termination = true
+    },
+    {
+      device_name           = "/dev/sdh"
+      volume_type           = "gp2"
+      volume_size           = "1"
+      delete_on_termination = true
+    },
+  ]
+
+  root_block_device = [
+    {
+      volume_size           = "160"
+      volume_type           = "gp2"
+      delete_on_termination = true
+    },
+  ]
+
+  # Auto scaling group
+  asg_name                  = "${var.name_prefix}-${var.resource}-${count.index}"
+  vpc_zone_identifier       = ["${data.terraform_remote_state.vpc.private_subnets[0]}", "${data.terraform_remote_state.vpc.private_subnets[1]}", "${data.terraform_remote_state.vpc.private_subnets[2]}"]
+  health_check_type         = "EC2"
+  min_size                  = 1
+  max_size                  = 8
+  desired_capacity          = 1
+  wait_for_capacity_timeout = 0
+
+  tags = [
+    {
+      key                 = "Environment"
+      value               = "${var.environment}"
+      propagate_at_launch = true
+    },
+    {
+      key                 = "Project"
+      value               = "${var.name_prefix}"
+      propagate_at_launch = true
+    },
+    {
+      key                 = "Commii"
+      value               = "${var.commit_sha}"
+      propagate_at_launch = true
+    },
+  ]
+
+  tags_as_map {
+    extra_tag1 = "extra_value1"
+    extra_tag2 = "extra_value2"
+  }
+}
